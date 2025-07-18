@@ -15,7 +15,6 @@
 
 import os
 import sys
-
 from shutil import which
 from pathlib import Path
 
@@ -25,6 +24,7 @@ import src.wps.connection
 import src.wps.bruteforce
 import src.utils
 import src.args
+
 
 def checkRequirements():
     """Verify requirements are met"""
@@ -38,15 +38,15 @@ def checkRequirements():
     if not which('pixiewps'):
         src.utils.die('Pixiewps is not installed, or not in PATH')
 
+
 def setupDirectories():
     """Create required directories"""
 
-    # We recently changed the PIXIEWPS_DIR and SESSIONS_DIR path
-    # Rename older .OSE data dir to .OneShot-Extended, and maintain compatibility
     old_dir = os.path.expanduser('~/.OSE')
     new_dir = os.path.expanduser('~/.OneShot-Extended')
 
-    if os.path.exists(old_dir):
+    # Rename old directory only if it exists and new directory does not
+    if os.path.exists(old_dir) and not os.path.exists(new_dir):
         try:
             os.rename(old_dir, new_dir)
             print('[*] Renamed legacy data directory')
@@ -54,8 +54,8 @@ def setupDirectories():
             print(f'[!] Failed to rename data directory: {e}')
 
     for directory in [src.utils.SESSIONS_DIR, src.utils.PIXIEWPS_DIR]:
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+        os.makedirs(directory, exist_ok=True)  # safer, avoids race conditions
+
 
 def setupAndroidWifi(android_network: src.wifi.android.AndroidNetwork, enable: bool = False):
     """Configure Android-specific WiFi settings"""
@@ -66,6 +66,7 @@ def setupAndroidWifi(android_network: src.wifi.android.AndroidNetwork, enable: b
         android_network.storeAlwaysScanState()
         android_network.disableWifi()
 
+
 def setupMediatekWifi(wmt_wifi_device: Path):
     """Initialize MediaTek WiFi dev"""
 
@@ -74,7 +75,11 @@ def setupMediatekWifi(wmt_wifi_device: Path):
                      '/dev/wmtWifi does not exist or it is not a character device')
 
     wmt_wifi_device.chmod(0o644)
-    wmt_wifi_device.write_text('1', encoding='utf-8')
+
+    # Only write '1' if it's not already set
+    current_val = wmt_wifi_device.read_text().strip()
+    if current_val != '1':
+        wmt_wifi_device.write_text('1', encoding='utf-8')
 
 
 def scanForNetworks(interface: str, vuln_list: list[str]) -> str:
@@ -82,6 +87,7 @@ def scanForNetworks(interface: str, vuln_list: list[str]) -> str:
 
     scanner = src.wifi.scanner.WiFiScanner(interface, vuln_list)
     return scanner.promptNetwork()
+
 
 def handleConnection(args):
     """Main connection logic"""
@@ -100,11 +106,12 @@ def handleConnection(args):
         connection.singleConnection(pbc_mode=True)
     else:
         if not args.bssid:
+            vuln_list = []
             try:
                 with open(args.vuln_list, 'r', encoding='utf-8') as file:
                     vuln_list = file.read().splitlines()
             except FileNotFoundError:
-                vuln_list = []
+                pass  # empty list if file not found
 
             if not args.loop:
                 print('[*] BSSID not specified (--bssid) — scanning for available networks')
@@ -127,6 +134,7 @@ def handleConnection(args):
                     args.pixie_force
                 )
 
+
 def main():
     """Main os-e code"""
 
@@ -136,13 +144,14 @@ def main():
     args = src.args.parseArgs()
 
     while True:
+        android_network = None
         try:
             android_network = src.wifi.android.AndroidNetwork()
 
             if args.clear:
                 src.utils.clearScreen()
 
-            if src.utils.isAndroid() is True and not args.dts and not args.mtk_wifi:
+            if src.utils.isAndroid() and not args.dts and not args.mtk_wifi:
                 setupAndroidWifi(android_network)
 
             if args.mtk_wifi:
@@ -170,7 +179,7 @@ def main():
                 break
 
         finally:
-            if src.utils.isAndroid() is True and not args.dts and not args.mtk_wifi:
+            if android_network and src.utils.isAndroid() and not args.dts and not args.mtk_wifi:
                 setupAndroidWifi(android_network, enable=True)
 
     if args.iface_down:
@@ -178,6 +187,7 @@ def main():
 
     if args.mtk_wifi:
         wmt_wifi_device.write_text('0', encoding='utf-8')
+
 
 if __name__ == '__main__':
     main()
