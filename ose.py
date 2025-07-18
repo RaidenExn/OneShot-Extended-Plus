@@ -15,6 +15,7 @@
 
 import os
 import sys
+import time
 from shutil import which
 from pathlib import Path
 
@@ -25,6 +26,8 @@ import src.wps.bruteforce
 import src.utils
 import src.args
 
+
+# ── UI Enhancements ─────────────────────────────────────────────
 
 def clearScreen():
     os.system('clear' if os.name != 'nt' else 'cls')
@@ -37,6 +40,15 @@ def printBanner():
     print("│   WPS Exploit & Audit Tool         │")
     print("└────────────────────────────────────┘")
     print("\033[0m")
+
+
+def info(msg): print(f"\033[1;34m[*]\033[0m {msg}")
+def success(msg): print(f"\033[1;32m[+]\033[0m {msg}")
+def warning(msg): print(f"\033[1;33m[!]\033[0m {msg}")
+def error(msg): print(f"\033[1;31m[✖]\033[0m {msg}")
+def abort(msg="Aborting…"): print(f"\n\033[1;31m[✖]\033[0m {msg}")
+
+# ────────────────────────────────────────────────────────────────
 
 
 def checkRequirements():
@@ -58,13 +70,12 @@ def setupDirectories():
     old_dir = os.path.expanduser('~/.OSE')
     new_dir = os.path.expanduser('~/.OneShot-Extended')
 
-    # Rename old directory only if it exists and new directory does not
     if os.path.exists(old_dir) and not os.path.exists(new_dir):
         try:
             os.rename(old_dir, new_dir)
-            print('[*] Renamed legacy data directory')
+            info('Renamed legacy data directory')
         except OSError as e:
-            print(f'[!] Failed to rename data directory: {e}')
+            warning(f'Failed to rename data directory: {e}')
 
     for directory in [src.utils.SESSIONS_DIR, src.utils.PIXIEWPS_DIR]:
         os.makedirs(directory, exist_ok=True)
@@ -89,7 +100,6 @@ def setupMediatekWifi(wmt_wifi_device: Path):
 
     wmt_wifi_device.chmod(0o644)
 
-    # Only write '1' if it's not already set
     current_val = wmt_wifi_device.read_text().strip()
     if current_val != '1':
         wmt_wifi_device.write_text('1', encoding='utf-8')
@@ -124,10 +134,10 @@ def handleConnection(args):
                 with open(args.vuln_list, 'r', encoding='utf-8') as file:
                     vuln_list = file.read().splitlines()
             except FileNotFoundError:
-                pass  # empty list if file not found
+                pass
 
             if not args.loop:
-                print('[*] BSSID not specified (--bssid) — scanning for available networks')
+                info('BSSID not specified (--bssid) — scanning for available networks')
 
             args.bssid = scanForNetworks(args.interface, vuln_list)
 
@@ -153,6 +163,8 @@ def main():
 
     clearScreen()
     printBanner()
+
+    start_time = time.time()
 
     checkRequirements()
     setupDirectories()
@@ -187,11 +199,11 @@ def main():
         except KeyboardInterrupt:
             if args.loop:
                 if input('\n[?] Exit the script (otherwise continue to AP scan)? [N/y] ').lower() == 'y':
-                    print('Aborting…')
+                    abort()
                     break
                 args.bssid = None
             else:
-                print('\nAborting…')
+                abort()
                 break
 
         finally:
@@ -203,6 +215,10 @@ def main():
 
     if args.mtk_wifi:
         wmt_wifi_device.write_text('0', encoding='utf-8')
+
+    # Runtime timer
+    elapsed = time.time() - start_time
+    info(f"Total runtime: {elapsed:.2f} seconds")
 
 
 if __name__ == '__main__':
