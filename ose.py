@@ -26,6 +26,19 @@ import src.utils
 import src.args
 
 
+def clearScreen():
+    os.system('clear' if os.name != 'nt' else 'cls')
+
+
+def printBanner():
+    print("\033[1;36m")
+    print("┌────────────────────────────────────┐")
+    print("│   OneShot-Extended Plus (OSE+)     │")
+    print("│   WPS Exploit & Audit Tool         │")
+    print("└────────────────────────────────────┘")
+    print("\033[0m")
+
+
 def checkRequirements():
     """Verify requirements are met"""
 
@@ -54,7 +67,7 @@ def setupDirectories():
             print(f'[!] Failed to rename data directory: {e}')
 
     for directory in [src.utils.SESSIONS_DIR, src.utils.PIXIEWPS_DIR]:
-        os.makedirs(directory, exist_ok=True)  # safer, avoids race conditions
+        os.makedirs(directory, exist_ok=True)
 
 
 def setupAndroidWifi(android_network: src.wifi.android.AndroidNetwork, enable: bool = False):
@@ -72,7 +85,7 @@ def setupMediatekWifi(wmt_wifi_device: Path):
 
     if not wmt_wifi_device.is_char_device():
         src.utils.die('Unable to activate MediaTek Wi-Fi interface device (--mtk-wifi): '
-                     '/dev/wmtWifi does not exist or it is not a character device')
+                      '/dev/wmtWifi does not exist or it is not a character device')
 
     wmt_wifi_device.chmod(0o644)
 
@@ -137,6 +150,9 @@ def handleConnection(args):
 
 def main():
     """Main os-e code"""
+
+    clearScreen()
+    printBanner()
 
     checkRequirements()
     setupDirectories()
