@@ -128,5 +128,20 @@ def parseArgs():
         '--wpa3', action='store_true', help="Enable WPA3 network scanning"
     )
 
+    # --auto flag to trigger Auto Mode
+    parser.add_argument(
+        '--auto',
+        action='store_true',
+        help='Automatically test networks and save passwords if found'
+    )
+
+    # Add a number to specify how many networks to test (between 2 and 10)
+    parser.add_argument(
+        '-n', '--num-networks',
+        type=int,
+        choices=range(2, 11),  # Limit the range from 2 to 10
+        help='Number of networks to test (between 2 and 10)'
+    )
+    
     args = parser.parse_args()
     return args
