@@ -122,5 +122,11 @@ def parseArgs():
         action='store_true',
         help='Verbose output'
     )
+
+    # Add the --wpa3 flag here:
+    parser.add_argument(
+        '--wpa3', action='store_true', help="Enable WPA3 network scanning"
+    )
+
     args = parser.parse_args()
     return args
