@@ -113,9 +113,23 @@ def scanForNetworks(interface: str, vuln_list: list[str]) -> str:
     return scanner.promptNetwork()
 
 
-def handleConnection(args):
-    """Main connection logic"""
+from src.wifi.wpa3scanner import WPA3Scanner  # Import WPA3Scanner at the top of the file
 
+def handleConnection(args):
+    """Main connection logic with WPA3 support"""
+
+    # If WPA3 flag is passed, we use WPA3Scanner
+    if args.wpa3:
+        # Initialize WPA3 scanner
+        wpa3_scanner = WPA3Scanner(args.interface)
+        wpa3_bssid = wpa3_scanner.promptWPA3Network()  # Prompt the user to select a WPA3 network
+        
+        if wpa3_bssid:
+            info(f"Connecting to WPA3 network: {wpa3_bssid}")
+            # Here, you can add WPA3-specific connection logic if needed
+            return  # Exit after handling WPA3 connection, no need to do WPS connection
+
+    # For other connection types (e.g., WPA2/WPS)
     if args.bruteforce:
         connection = src.wps.bruteforce.Initialize(args.interface)
     else:
@@ -157,7 +171,6 @@ def handleConnection(args):
                     args.show_pixie_cmd,
                     args.pixie_force
                 )
-
 
 def main():
     """Main os-e code"""
