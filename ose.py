@@ -25,6 +25,7 @@ import src.wps.connection
 import src.wps.bruteforce
 import src.utils
 import src.args
+from src.wifi.wpa3scanner import WPA3Scanner
 
 
 # ── UI Enhancements ─────────────────────────────────────────────
