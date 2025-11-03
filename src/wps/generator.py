@@ -1,4 +1,7 @@
 from typing import Union
+import logging  # <-- Import logging
+
+logger = logging.getLogger(__name__)  # <-- Get logger
 
 class NetworkAddress:
     def __init__(self, mac):
@@ -156,6 +159,7 @@ class WPSpin:
                       'pinH108L': {'name': 'H108L', 'mode': self.ALGO_STATIC, 'gen': lambda mac: 9422988},
                       'pinONO': {'name': 'CBN ONO', 'mode': self.ALGO_STATIC, 'gen': lambda mac: 9575521}}
 
+    # --- These prints STAYS, they are for user interaction ---
     def promptPin(self, bssid: str):
         pins = self._getSuggested(bssid)
         if not pins:
@@ -266,7 +270,8 @@ class WPSpin:
         try:
             mac = NetworkAddress(bssid)
         except (ValueError, TypeError) as e:
-            print(f"[!] Invalid BSSID for pin generation: {e}")
+            # Use logger for errors
+            logger.error(f"Invalid BSSID for pin generation: {e}")
             return "00000000" 
 
         if algo not in self.ALGOS:

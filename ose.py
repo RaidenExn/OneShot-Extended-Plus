@@ -2,6 +2,8 @@ import os
 import sys
 from shutil import which
 from pathlib import Path
+import logging
+import time  # <-- Import time
 
 import src.android
 import src.scanner
@@ -9,6 +11,10 @@ import src.wps.connection
 import src.wps.bruteforce
 import src.utils
 import src.args
+from src.logger import setup_logging
+
+# Get a logger for this module
+logger = logging.getLogger(__name__)
 
 def checkRequirements():
     if sys.version_info < (3, 9):
@@ -17,22 +23,35 @@ def checkRequirements():
     if os.getuid() != 0:
         src.utils.die('Run it as root')
 
-    if not which('pixiewps'):
-        src.utils.die('Pixiewps is not installed, or not in PATH')
+    required_commands = ['pixiewps', 'iw', 'ip', 'rfkill']
+    missing_commands = []
+
+    for cmd in required_commands:
+        if not which(cmd):
+            missing_commands.append(cmd)
+
+    if missing_commands:
+        src.utils.die(
+            'Missing required commands: '
+            f'{", ".join(missing_commands)}'
+            '\nPlease install them and ensure they are in your PATH.'
+        )
+    
+    logger.debug('All required commands found.')
 
 def setupDirectories():
     old_dir = Path.home() / '.OSE'
-    new_dir = Path.home() / '.OneShot-Extended'
+    new_dir = src.utils.BASE_DIR
 
     if old_dir.exists():
         try:
             old_dir.rename(new_dir)
-            print('[*] Renamed legacy data directory')
+            logger.info('Renamed legacy data directory')
         except OSError as e:
-            print(f'[!] Failed to rename data directory: {e}')
+            logger.warning(f'Failed to rename data directory: {e}')
 
     for directory in [src.utils.SESSIONS_DIR, src.utils.PIXIEWPS_DIR]:
-        Path(directory).mkdir(parents=True, exist_ok=True)
+        directory.mkdir(parents=True, exist_ok=True)
 
 def setupAndroidWifi(android_network: src.android.AndroidNetwork, enable: bool = False):
     if enable:
@@ -58,35 +77,50 @@ def scanForNetworks(interface: str, vuln_list: list[str]) -> str:
     return scanner.promptNetwork()
 
 def handleConnection(args):
+    # --- This function is modified ---
+    
     if args.bruteforce:
-        connection = src.wps.bruteforce.Initialize(args.interface)
+        connection = src.wps.bruteforce.Initialize(args.interface, args)
     else:
         connection = src.wps.connection.Initialize(
             args.interface,
             args.write,
-            args.save,
-            args.verbose
+            args.save
         )
 
     if args.pbc:
+        # --- Start Timer ---
+        start_time = time.monotonic()
+        
         connection.singleConnection(pbc_mode=True)
+        
+        # --- End Timer and Log ---
+        end_time = time.monotonic()
+        logger.info(f"PBC attack finished in {end_time - start_time:.2f} seconds.")
+            
     else:
         if not args.bssid:
             vuln_list = []
             try:
                 with open(args.vuln_list, 'r', encoding='utf-8') as file:
-                    vuln_list = file.read().splitlines()
+                    vuln_list = [line for line in (line.strip() for line in file) if line]
+                logger.info(f'Loaded vulnerability list: {len(vuln_list)} entries from {args.vuln_list}')
             except FileNotFoundError:
-                pass
+                logger.warning(f'Vulnerability list not found at {args.vuln_list}. Proceeding without it.')
             except (IOError, OSError) as e:
-                print(f'[!] Could not read vulnerability list: {e}')
+                logger.warning(f'Could not read vulnerability list: {e}')
 
             if not args.loop:
-                print('[*] BSSID not specified (--bssid) — scanning for available networks')
+                logger.info('BSSID not specified (--bssid) — scanning for available networks')
 
+            # Scanning is done *before* the timer starts
             args.bssid = scanForNetworks(args.interface, vuln_list)
 
         if args.bssid:
+            # --- Start Timer ---
+            start_time = time.monotonic()
+            attack_type = "Bruteforce" # Default
+            
             if args.bruteforce:
                 connection.smartBruteforce(
                     args.bssid,
@@ -94,6 +128,7 @@ def handleConnection(args):
                     args.delay
                 )
             else:
+                attack_type = "PIN/Pixie" # More specific
                 connection.singleConnection(
                     args.bssid,
                     args.pin,
@@ -101,12 +136,20 @@ def handleConnection(args):
                     args.show_pixie_cmd,
                     args.pixie_force
                 )
+            
+            # --- End Timer and Log ---
+            end_time = time.monotonic()
+            logger.info(f"{attack_type} attack on {args.bssid} finished in {end_time - start_time:.2f} seconds.")
 
 def main():
+    args = src.args.parseArgs()
+    
+    setup_logging(verbose=args.verbose)
+    
+    logger.debug('Logging initialized')
+
     checkRequirements()
     setupDirectories()
-
-    args = src.args.parseArgs()
 
     wmt_wifi_device = Path('/dev/wmtWifi') if args.mtk_wifi else None
     android_network = None
@@ -115,7 +158,7 @@ def main():
         if src.utils.isAndroid() and not args.dts and not args.mtk_wifi:
             android_network = src.android.AndroidNetwork()
     except Exception as e:
-        print(f'[!] Failed to initialize AndroidNetwork: {e}')
+        logger.error(f'Failed to initialize AndroidNetwork: {e}')
 
 
     while True:
@@ -132,7 +175,7 @@ def main():
             if src.utils.ifaceCtl(args.interface, action='up'):
                 src.utils.die(f'Unable to up interface \'{args.interface}\'')
 
-            handleConnection(args)
+            handleConnection(args) # This function now handles its own timing
 
             if not args.loop:
                 break
@@ -143,21 +186,21 @@ def main():
             if args.loop:
                 try:
                     if input('\n[?] Exit the script (otherwise continue to AP scan)? [N/y] ').lower() == 'y':
-                        print('Aborting…')
+                        logger.warning('Aborting…')
                         break
                     args.bssid = None
                 except EOFError:
-                    print('\nAborting…')
+                    logger.warning('\nAborting…')
                     break
             else:
-                print('\nAborting…')
+                logger.warning('\nAborting…')
                 break
         
         except Exception as e:
-            print(f'[!] An unexpected error occurred: {e}')
+            logger.error(f'An unexpected error occurred: {e}')
             if not args.loop:
                 break
-            print('[*] Restarting loop...')
+            logger.info('Restarting loop...')
 
 
         finally:
@@ -165,7 +208,7 @@ def main():
                 try:
                     setupAndroidWifi(android_network, enable=True)
                 except Exception as e:
-                    print(f'[!] Failed to restore Android Wi-Fi state: {e}')
+                    logger.warning(f'Failed to restore Android Wi-Fi state: {e}')
 
     if args.iface_down:
         src.utils.ifaceCtl(args.interface, action='down')
@@ -174,7 +217,7 @@ def main():
         try:
             wmt_wifi_device.write_text('0', encoding='utf-8')
         except (IOError, OSError) as e:
-            print(f'[!] Failed to write to {wmt_wifi_device} on exit: {e}')
+            logger.error(f'Failed to write to {wmt_wifi_device} on exit: {e}')
 
 if __name__ == '__main__':
     main()

@@ -2,74 +2,93 @@ import sys
 import os
 from pathlib import Path
 import subprocess
+import logging
+from typing import Optional
 
-USER_HOME = str(Path.home())
-BASE_DIR = f'{USER_HOME}/.OneShot-Extended'
-SESSIONS_DIR = f'{BASE_DIR}/sessions/'
-PIXIEWPS_DIR = f'{BASE_DIR}/pixiewps/'
-REPORTS_DIR = f'{os.getcwd()}/reports/'
+# Get a logger for this module
+logger = logging.getLogger(__name__)
 
-def isAndroid():
+# --- Use pathlib for all path definitions ---
+USER_HOME = Path.home()
+BASE_DIR = USER_HOME / '.OneShot-Extended'
+SESSIONS_DIR = BASE_DIR / 'sessions'
+PIXIEWPS_DIR = BASE_DIR / 'pixiewps'
+REPORTS_DIR = Path.cwd() / 'reports' # Use Path.cwd() instead of os.getcwd()
+
+# --- NEW Centralized Subprocess Runner ---
+def run_command(cmd: list[str], log_errors: bool = True) -> Optional[subprocess.CompletedProcess]:
+    """
+    Runs an external command, logging errors uniformly.
+    Returns the CompletedProcess object on success or failure.
+    Returns None only on FileNotFoundError or OSError.
+    """
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8'
+        )
+        if result.returncode != 0 and log_errors:
+            error_output = (result.stderr or result.stdout).strip()
+            # Don't log error for "command failed:" as scanner.py handles it
+            if "command failed:" not in error_output:
+                logger.error(f'Command failed: {" ".join(cmd)}\n{error_output}')
+        
+        return result
+        
+    except FileNotFoundError:
+        if log_errors:
+            logger.error(f'Command not found: "{cmd[0]}"')
+    except OSError as e:
+        if log_errors:
+            logger.error(f'OS error running command: {" ".join(cmd)}\n{e}')
+    
+    return None
+# --- End of new helper ---
+
+
+def isAndroid() -> bool:
     return bool(hasattr(sys, 'getandroidapilevel'))
 
-def ifaceCtl(interface: str, action: str):
+def ifaceCtl(interface: str, action: str) -> int:
+    """Brings an interface up or down."""
     command = ['ip', 'link', 'set', interface, action]
 
-    def _rfKillUnblock():
+    def _rfKillUnblock() -> bool:
         rfkill_command = ['rfkill', 'unblock', 'wifi']
-        try:
-            subprocess.run(
-                rfkill_command, 
-                check=True, 
-                capture_output=True, 
-                text=True
-            )
-            return True
-        except (subprocess.CalledProcessError, FileNotFoundError) as error:
-            print(f'[!] Failed to unblock interface: \n {error}')
-            return False
+        result = run_command(rfkill_command) # Logs errors by default
+        return bool(result and result.returncode == 0)
 
-    try:
-        command_output = subprocess.run(
-            command,
-            encoding='utf-8',
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT
-        )
-    except FileNotFoundError:
-        print (f'[!] Error: "ip" command not found. Is it installed and in your PATH?')
-        return 1
-    except OSError as e:
-        print (f'[!] OS error trying to run "ip" command: {e}')
+    # Run the command. Don't log errors yet.
+    result = run_command(command, log_errors=False)
+    
+    if result is None:
+        logger.error(f'Failed to run "ip" command. Is it installed?')
         return 1
 
-    command_output_stripped = command_output.stdout.strip()
+    if result.returncode == 0:
+        return 0 # Success
+
+    # Command failed. Now we log the error and check for RF-kill.
+    command_output_stripped = (result.stderr or result.stdout).strip()
+    logger.error(f'Failed to set interface {action}: \n{command_output_stripped}')
 
     if 'RF-kill' in command_output_stripped and not isAndroid():
-        print('[-] RF-kill is blocking the interface, attempting to unblock...')
+        logger.warning('RF-kill is blocking the interface, attempting to unblock...')
         if _rfKillUnblock():
-            print('[-] Retrying command...')
-            try:
-                command_output = subprocess.run(
-                    command,
-                    encoding='utf-8',
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT
-                )
-                command_output_stripped = command_output.stdout.strip()
-            except (FileNotFoundError, OSError) as e:
-                print(f'[!] Error on retry: {e}')
-                return 1
+            logger.info('Retrying command...')
+            retry_result = run_command(command) # Log errors on retry
+            if retry_result and retry_result.returncode == 0:
+                return 0 # Success on retry
         else:
-            print('[!] Failed to unblock RF-kill. Interface state unchanged.')
+            logger.error('Failed to unblock RF-kill. Interface state unchanged.')
 
-    if command_output.returncode != 0 and command_output_stripped:
-        print(f'[!] {command_output_stripped}')
+    return 1
 
-    return command_output.returncode
-
-def clearScreen():
+def clearScreen() -> None:
     os.system('clear')
 
-def die(text: str):
-    sys.exit(f'[!] {text}')
+def die(text: str) -> None:
+    logger.critical(text)
+    sys.exit(1)
