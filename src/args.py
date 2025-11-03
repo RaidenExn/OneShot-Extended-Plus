@@ -1,22 +1,7 @@
-#  OneShot-Extended (WPS penetration testing utility) is a fork of the tool with extra features
-#  Copyright (C) 2025 chickendrop89
-#
-#  This program is free software; you can redistribute it and/or
-#  modify it under the terms of the GNU General Public License
-#  as published by the Free Software Foundation; either version 2
-#  of the License, or (at your option) any later version.
-#
-#  This program is distributed in the hope that it will be useful,
-#  but WITHOUT ANY WARRANTY; without even the implied warranty of
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#  GNU General Public License for more details.
-
 import argparse
 import os
 
 def parseArgs():
-    """Parse arguments passed to the main python script."""
-
     parser = argparse.ArgumentParser(
         description='OneShot-Extended (c) 2024 chickendrop89',
         epilog='Example: %(prog)s -i wlan0 -b 00:90:4C:C1:AC:21 -K'
@@ -86,7 +71,9 @@ def parseArgs():
     parser.add_argument(
         '--vuln-list',
         type=str,
-        default=os.path.dirname(__file__) + '/../vulnwsc.txt',
+        default=os.path.normpath(
+            os.path.join(os.path.dirname(__file__), '..', 'vulnwsc.txt')
+        ),
         help='Use custom file with vulnerable devices list'
     )
     parser.add_argument(
@@ -122,5 +109,5 @@ def parseArgs():
         action='store_true',
         help='Verbose output'
     )
-    args = parser.parse_args()
-    return args
+    
+    return parser.parse_args()

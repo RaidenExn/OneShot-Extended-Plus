@@ -1,34 +1,16 @@
-#!/usr/bin/env python3
-
-#  OneShot-Extended (WPS penetration testing utility) is a fork of the tool with extra features
-#  Copyright (C) 2025 chickendrop89
-#
-#  This program is free software; you can redistribute it and/or
-#  modify it under the terms of the GNU General Public License
-#  as published by the Free Software Foundation; either version 2
-#  of the License, or (at your option) any later version.
-#
-#  This program is distributed in the hope that it will be useful,
-#  but WITHOUT ANY WARRANTY; without even the implied warranty of
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#  GNU General Public License for more details.
-
 import os
 import sys
-
 from shutil import which
 from pathlib import Path
 
-import src.wifi.android
-import src.wifi.scanner
+import src.android
+import src.scanner
 import src.wps.connection
 import src.wps.bruteforce
 import src.utils
 import src.args
 
 def checkRequirements():
-    """Verify requirements are met"""
-
     if sys.version_info < (3, 9):
         src.utils.die('The program requires Python 3.9 and above')
 
@@ -39,27 +21,20 @@ def checkRequirements():
         src.utils.die('Pixiewps is not installed, or not in PATH')
 
 def setupDirectories():
-    """Create required directories"""
+    old_dir = Path.home() / '.OSE'
+    new_dir = Path.home() / '.OneShot-Extended'
 
-    # We recently changed the PIXIEWPS_DIR and SESSIONS_DIR path
-    # Rename older .OSE data dir to .OneShot-Extended, and maintain compatibility
-    old_dir = os.path.expanduser('~/.OSE')
-    new_dir = os.path.expanduser('~/.OneShot-Extended')
-
-    if os.path.exists(old_dir):
+    if old_dir.exists():
         try:
-            os.rename(old_dir, new_dir)
+            old_dir.rename(new_dir)
             print('[*] Renamed legacy data directory')
         except OSError as e:
             print(f'[!] Failed to rename data directory: {e}')
 
     for directory in [src.utils.SESSIONS_DIR, src.utils.PIXIEWPS_DIR]:
-        if not os.path.exists(directory):
-            os.makedirs(directory)
+        Path(directory).mkdir(parents=True, exist_ok=True)
 
-def setupAndroidWifi(android_network: src.wifi.android.AndroidNetwork, enable: bool = False):
-    """Configure Android-specific WiFi settings"""
-
+def setupAndroidWifi(android_network: src.android.AndroidNetwork, enable: bool = False):
     if enable:
         android_network.enableWifi()
     else:
@@ -67,25 +42,22 @@ def setupAndroidWifi(android_network: src.wifi.android.AndroidNetwork, enable: b
         android_network.disableWifi()
 
 def setupMediatekWifi(wmt_wifi_device: Path):
-    """Initialize MediaTek WiFi dev"""
-
     if not wmt_wifi_device.is_char_device():
         src.utils.die('Unable to activate MediaTek Wi-Fi interface device (--mtk-wifi): '
-                     '/dev/wmtWifi does not exist or it is not a character device')
+                     f'{wmt_wifi_device} does not exist or it is not a character device')
 
-    wmt_wifi_device.chmod(0o644)
-    wmt_wifi_device.write_text('1', encoding='utf-8')
+    try:
+        wmt_wifi_device.chmod(0o644)
+        wmt_wifi_device.write_text('1', encoding='utf-8')
+    except (IOError, OSError) as e:
+        src.utils.die(f'Failed to write to {wmt_wifi_device}: {e}')
 
 
 def scanForNetworks(interface: str, vuln_list: list[str]) -> str:
-    """Scan, and prompt user to select network. Returns BSSID"""
-
-    scanner = src.wifi.scanner.WiFiScanner(interface, vuln_list)
+    scanner = src.scanner.WiFiScanner(interface, vuln_list)
     return scanner.promptNetwork()
 
 def handleConnection(args):
-    """Main connection logic"""
-
     if args.bruteforce:
         connection = src.wps.bruteforce.Initialize(args.interface)
     else:
@@ -100,11 +72,14 @@ def handleConnection(args):
         connection.singleConnection(pbc_mode=True)
     else:
         if not args.bssid:
+            vuln_list = []
             try:
                 with open(args.vuln_list, 'r', encoding='utf-8') as file:
                     vuln_list = file.read().splitlines()
             except FileNotFoundError:
-                vuln_list = []
+                pass
+            except (IOError, OSError) as e:
+                print(f'[!] Could not read vulnerability list: {e}')
 
             if not args.loop:
                 print('[*] BSSID not specified (--bssid) — scanning for available networks')
@@ -128,25 +103,30 @@ def handleConnection(args):
                 )
 
 def main():
-    """Main os-e code"""
-
     checkRequirements()
     setupDirectories()
 
     args = src.args.parseArgs()
 
+    wmt_wifi_device = Path('/dev/wmtWifi') if args.mtk_wifi else None
+    android_network = None
+
+    try:
+        if src.utils.isAndroid() and not args.dts and not args.mtk_wifi:
+            android_network = src.android.AndroidNetwork()
+    except Exception as e:
+        print(f'[!] Failed to initialize AndroidNetwork: {e}')
+
+
     while True:
         try:
-            android_network = src.wifi.android.AndroidNetwork()
-
             if args.clear:
                 src.utils.clearScreen()
 
-            if src.utils.isAndroid() is True and not args.dts and not args.mtk_wifi:
+            if android_network:
                 setupAndroidWifi(android_network)
 
-            if args.mtk_wifi:
-                wmt_wifi_device = Path('/dev/wmtWifi')
+            if args.mtk_wifi and wmt_wifi_device:
                 setupMediatekWifi(wmt_wifi_device)
 
             if src.utils.ifaceCtl(args.interface, action='up'):
@@ -161,23 +141,40 @@ def main():
 
         except KeyboardInterrupt:
             if args.loop:
-                if input('\n[?] Exit the script (otherwise continue to AP scan)? [N/y] ').lower() == 'y':
-                    print('Aborting…')
+                try:
+                    if input('\n[?] Exit the script (otherwise continue to AP scan)? [N/y] ').lower() == 'y':
+                        print('Aborting…')
+                        break
+                    args.bssid = None
+                except EOFError:
+                    print('\nAborting…')
                     break
-                args.bssid = None
             else:
                 print('\nAborting…')
                 break
+        
+        except Exception as e:
+            print(f'[!] An unexpected error occurred: {e}')
+            if not args.loop:
+                break
+            print('[*] Restarting loop...')
+
 
         finally:
-            if src.utils.isAndroid() is True and not args.dts and not args.mtk_wifi:
-                setupAndroidWifi(android_network, enable=True)
+            if android_network:
+                try:
+                    setupAndroidWifi(android_network, enable=True)
+                except Exception as e:
+                    print(f'[!] Failed to restore Android Wi-Fi state: {e}')
 
     if args.iface_down:
         src.utils.ifaceCtl(args.interface, action='down')
 
-    if args.mtk_wifi:
-        wmt_wifi_device.write_text('0', encoding='utf-8')
+    if args.mtk_wifi and wmt_wifi_device and wmt_wifi_device.exists():
+        try:
+            wmt_wifi_device.write_text('0', encoding='utf-8')
+        except (IOError, OSError) as e:
+            print(f'[!] Failed to write to {wmt_wifi_device} on exit: {e}')
 
 if __name__ == '__main__':
     main()

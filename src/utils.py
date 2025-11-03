@@ -1,71 +1,75 @@
-#  OneShot-Extended (WPS penetration testing utility) is a fork of the tool with extra features
-#  Copyright (C) 2025 chickendrop89
-#
-#  This program is free software; you can redistribute it and/or
-#  modify it under the terms of the GNU General Public License
-#  as published by the Free Software Foundation; either version 2
-#  of the License, or (at your option) any later version.
-#
-#  This program is distributed in the hope that it will be useful,
-#  but WITHOUT ANY WARRANTY; without even the implied warranty of
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#  GNU General Public License for more details.
-
 import sys
 import os
-import pathlib
+from pathlib import Path
 import subprocess
 
-USER_HOME = str(pathlib.Path.home())
-SESSIONS_DIR = f'{USER_HOME}/.OneShot-Extended/sessions/'
-PIXIEWPS_DIR = f'{USER_HOME}/.OneShot-Extended/pixiewps/'
-REPORTS_DIR  = f'{os.getcwd()}/reports/'
+USER_HOME = str(Path.home())
+BASE_DIR = f'{USER_HOME}/.OneShot-Extended'
+SESSIONS_DIR = f'{BASE_DIR}/sessions/'
+PIXIEWPS_DIR = f'{BASE_DIR}/pixiewps/'
+REPORTS_DIR = f'{os.getcwd()}/reports/'
 
 def isAndroid():
-    """Check if this project is ran on android."""
-
     return bool(hasattr(sys, 'getandroidapilevel'))
 
 def ifaceCtl(interface: str, action: str):
-    """Put an interface up or down."""
+    command = ['ip', 'link', 'set', interface, action]
 
-    command = ['ip', 'link', 'set', f'{interface}', f'{action}']
+    def _rfKillUnblock():
+        rfkill_command = ['rfkill', 'unblock', 'wifi']
+        try:
+            subprocess.run(
+                rfkill_command, 
+                check=True, 
+                capture_output=True, 
+                text=True
+            )
+            return True
+        except (subprocess.CalledProcessError, FileNotFoundError) as error:
+            print(f'[!] Failed to unblock interface: \n {error}')
+            return False
 
     try:
-        command_output = subprocess.run(command,
-            encoding='utf-8', stdout=subprocess.PIPE,
+        command_output = subprocess.run(
+            command,
+            encoding='utf-8',
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT
         )
-    except (subprocess.CalledProcessError, FileNotFoundError) as error:
-        print (f'[!] Can not control interface with ip link: \n {error}')
+    except FileNotFoundError:
+        print (f'[!] Error: "ip" command not found. Is it installed and in your PATH?')
+        return 1
+    except OSError as e:
+        print (f'[!] OS error trying to run "ip" command: {e}')
+        return 1
 
     command_output_stripped = command_output.stdout.strip()
 
-    if isAndroid() is False:
-        def _rfKillUnblock():
-            rfkill_command = ['rfkill', 'unblock', 'wifi']
-
+    if 'RF-kill' in command_output_stripped and not isAndroid():
+        print('[-] RF-kill is blocking the interface, attempting to unblock...')
+        if _rfKillUnblock():
+            print('[-] Retrying command...')
             try:
-                subprocess.run(rfkill_command, check=True)
-            except (subprocess.CalledProcessError, FileNotFoundError) as error:
-                print(f'[!] Failed to unblock interface, not continuing: \n {error}')
+                command_output = subprocess.run(
+                    command,
+                    encoding='utf-8',
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT
+                )
+                command_output_stripped = command_output.stdout.strip()
+            except (FileNotFoundError, OSError) as e:
+                print(f'[!] Error on retry: {e}')
+                return 1
+        else:
+            print('[!] Failed to unblock RF-kill. Interface state unchanged.')
 
-        if 'RF-kill' in command_output_stripped:
-            print('[-] RF-kill is blocking the interface, unblocking')
-            _rfKillUnblock()
-            return
-
-    if command_output.returncode != 0:
+    if command_output.returncode != 0 and command_output_stripped:
         print(f'[!] {command_output_stripped}')
 
     return command_output.returncode
 
 def clearScreen():
-    """Clear the terminal screen."""
-
     os.system('clear')
 
 def die(text: str):
-    """Print an error and exit with non-zero exit code."""
-
-    sys.exit(f'[!] {text} \n')
+    sys.exit(f'[!] {text}')
